@@ -19,7 +19,6 @@ export class FakeXMLHttpRequest extends EventTarget {
 
   constructor() {
     super();
-    console.log("DEBUG XHR.constructor", this);
     this.#init_internal();
     this.#mime_type = null;
 
@@ -87,7 +86,6 @@ export class FakeXMLHttpRequest extends EventTarget {
   }
 
   open(method, url, async, user, password) {
-    console.log("DEBUG XHR.open", this, method, url, async, user, password);
 
     if (async === false) //erroring here is actually permitted by spec
       throw new DOMException("InvalidAccessError") 
@@ -106,7 +104,6 @@ export class FakeXMLHttpRequest extends EventTarget {
   }
 
   send(body) {
-    console.log("DEBUG XHR.send", this, body);
     if (this.#req_options.method === "GET")
       body = undefined;
 

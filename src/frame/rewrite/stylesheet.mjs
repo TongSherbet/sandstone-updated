@@ -14,7 +14,7 @@ export async function rewrite_stylesheet(link_element) {
   let css, response;
   try {
     response = await network.fetch(css_url);
-    css = await response.text();  
+    css = await response.text();
   }
   catch (e) {
     css = "";

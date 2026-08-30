@@ -1,128 +1,81 @@
-import * as util from "../util.mjs";
-import { ctx_vars, unreadable_vars } from "./context.mjs";
+import { rewrite_js as fallback_rewrite_js } from "./parser-fallback.mjs";
+import { setWasm, rewriteJsInner } from "./rewrite/oxc/rewriter.mjs";
 
-import * as meriyah from "meriyah";
-import * as astray from 'astray';
+// rewrite config for the scramjet (oxc) rewriter — helper names must match
+// the shims installed in src/frame/scramjet.mjs
+const globals = {
+  wrapfn: "$scramjet$wrap",
+  wrappropertybase: "$scramjet__",
+  wrappropertyfn: "$scramjet$prop",
+  cleanrestfn: "$scramjet$clean",
+  importfn: "$scramjet$import",
+  rewritefn: "$scramjet$rewrite",
+  wrappostmessagefn: "$scramjet$wrappostmessage",
+  metafn: "$scramjet$meta",
+  pushsourcemapfn: "$scramjet$pushsourcemap",
+  trysetfn: "$scramjet$tryset",
+  templocid: "$scramjet$temploc",
+  tempunusedid: "$scramjet$tempunused",
+};
 
-let total_time = 0;
+const flags = {
+  sourcemaps: true,
+  captureErrors: false,
+  scramitize: false,
+  disableComputedWrap: false,
+  destructureRewrites: true,
+  allowInvalidJs: true,
+};
 
-class ASTVisitor {
-  constructor(ast) {
-    this.ast = ast;
-    this.rewrites = [];
-    this.block_depth = 0;
-    this.function_depth = 0;
-    this.for_init = false;
+let wasm_ready = false;
+let page_base = "about:blank";
 
-    this.ThisExpression = this.ThisExpression.bind(this);
-    this.Identifier = this.Identifier.bind(this);
-    this.BlockStatement = this.BlockStatement.bind(this);
-  }
-
-  ThisExpression(node) {
-    let parentheses = false;
-    let parent_node = node;
-    while (parent_node) {
-      if (parent_node.type === "NewExpression") {
-        parentheses = true;
-        break;
-      }
-      parent_node = parent_node.path.parent;
-    }
-    this.rewrites.push({type: "this", pos: node.start, parentheses: parentheses});
-  }
-
-  Identifier(node) {
-    let parent = node.path.parent;
-    if (parent.type === "MemberExpression" && parent.start !== node.start) 
-      return;
-    if (parent.type === "VariableDeclarator" && parent.id === node)
-      return;
-    let ignored_parents = [
-      "Property", "FunctionDeclaration", "AssignmentPattern", 
-      "FunctionExpression", "ArrowFunctionExpression", "MethodDefinition"
-    ];
-    if (ignored_parents.includes(parent.type))
-      return;
-    if (!ctx_vars.includes(node.name)) 
-      return;
-
-    //this behavior isn't really correct
-    let simple = false;
-    if (parent.type === "AssignmentExpression" && parent.left === node) {
-      if (node.name !== "location")
-        return;
-      simple = true;
-    }
-    this.rewrites.push({type: "global", pos: node.start, name: node.name, simple: simple});
-  }
-
-  BlockStatement(node) {
-    let first_node = node.body[0];
-    if (!first_node) 
-      return;
-
-    if (first_node.type === "ExpressionStatement" && first_node.directive === "use asm") {
-      return astray.SKIP;
-    }
-  }
+//set the base url of the proxied page, used for URL resolution in rewrites
+export function set_base(base) {
+  page_base = base;
 }
 
-function gen_rewrite_code(rewrite) {
-  if (rewrite.type === "this") {
-    let replacement = `__get_this__(this)`;
-    if (rewrite.parentheses)
-      replacement = `(${replacement})`;
-    return [replacement, rewrite.pos + 4];
-  }
-  else if (rewrite.type === "global") {
-    let replacement;
-    if (rewrite.simple || unreadable_vars.includes(rewrite.name)) 
-      replacement = `__ctx__.${rewrite.name}`;
-    else 
-      replacement  = `(__get_var__(${rewrite.name}, "${rewrite.name}"))`;
-    return [replacement, rewrite.pos + rewrite.name.length];
-  }
-  else if (rewrite.type === "delete") {
-    let length = rewrite.end - rewrite.pos;
-    return ["", rewrite.pos + length];
-  }
-  throw new Error("invalid rewrite type");
-}
-
-export function rewrite_js(js) {
-  let start = performance.now();
-  let ast
+// initialize the oxc wasm rewriter. `module` is a WebAssembly.Module (or
+// bytes) delivered from the host. Falls back to the meriyah rewriter on failure.
+export function init(module) {
   try {
-    ast = meriyah.parse(js, {ranges: true, webcompat: true});
+    setWasm(module);
+    // smoke test to force wasm instantiation
+    rewrite_js("console.log('scramjet rewriter smoke test');");
+    wasm_ready = true;
   }
   catch (e) {
-    console.error("parse error", e);
-    return js;
+    console.error("failed to initialize scramjet rewriter, falling back to meriyah:", e);
+    wasm_ready = false;
   }
-  let patch_start = performance.now();
-  let ast_visitor = new ASTVisitor(ast);
-  astray.walk(ast, ast_visitor);
-  ast_visitor.rewrites.sort((a, b) => a.pos - b.pos);
+  globalThis.__REWRITER_MODE__ = wasm_ready ? "oxc" : "meriyah";
+  return wasm_ready;
+}
 
-  let rewritten_js = "";
-  if (ast_visitor.rewrites) {
-    let prev_offset = 0;
-    for (let rewrite of ast_visitor.rewrites) {
-      rewritten_js += js.substring(prev_offset, rewrite.pos);
-      let [replacement, offset] = gen_rewrite_code(rewrite);
-      rewritten_js += replacement;
-      prev_offset = offset;
-    }
-    rewritten_js += js.substring(prev_offset);
+export function using_wasm() {
+  return wasm_ready;
+}
+
+export function rewrite_js(js, url = null, options = {}) {
+  if (!wasm_ready)
+    return fallback_rewrite_js(js);
+
+  try {
+    let env = {
+      config: { globals: globals, flags: flags },
+      prefix: { pathname: "/" },
+      interface: {
+        //strings are left untouched — sandstone intercepts network at runtime
+        codecEncode: (input) => input,
+      },
+    };
+    let meta = { base: new URL(options.base || page_base) };
+    let output = rewriteJsInner(js, url || "(inline)", env, meta, !!options.module);
+    let rewritten = typeof output.js === "string" ? output.js : new TextDecoder().decode(output.js);
+    return rewritten;
   }
-
-  let end = performance.now();
-  total_time += end - start;
-  let parse_time_rounded = util.round_float(patch_start - start, 2);
-  let patch_time_rounded = util.round_float(end - patch_start, 2);
-  let total_rounded = util.round_float(total_time, 2)
-  console.log(`parse took ${parse_time_rounded} ms, rewrite took ${patch_time_rounded} ms, total is ${total_rounded} ms (js size: ${Math.round(js.length/1024)} kb)`);
-  
-  return rewritten_js || js;
+  catch (e) {
+    console.warn("scramjet rewrite failed, falling back to meriyah:", e.message);
+    return fallback_rewrite_js(js);
+  }
 }

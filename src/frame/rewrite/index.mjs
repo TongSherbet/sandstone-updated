@@ -1,7 +1,7 @@
 export { rewrite_element as element } from "./element.mjs";
 
 //synchronous rewriter functions - may run in the background during load
-export { rewrite_media as media } from "./media.mjs";
+export { rewrite_media as media, install_media_interception } from "./media.mjs";
 export { rewrite_link as link } from "./link.mjs";
 export { rewrite_meta as meta } from "./meta.mjs";
 export { rewrite_noscript as noscript } from "./noscript.mjs";

@@ -1,10 +1,9 @@
 import * as rpc from "../rpc.mjs";
 import * as util from "../util.mjs";
 import * as network from "./network.mjs";
+import * as rewriter_wasm from "./rewriter-wasm.mjs";
 
 import { version } from "./index.mjs";
-
-import { libcurl } from "libcurl.js/bundled";
 
 //frame_js is a string, which is imported using webpack
 import frame_js from "../../dist/sandstone_frame.js";
@@ -66,7 +65,7 @@ export class ProxyFrame {
     this.url = null;
     this.id = Math.random() + "";
     this.iframe = document.createElement("iframe");
-    this.iframe.sandbox = "allow-scripts allow-forms allow-modals allow-pointer-lock";
+    this.iframe.sandbox = "allow-scripts allow-forms allow-modals allow-pointer-lock allow-same-origin";
     this.iframe.allowFullscreen = true;
     this.iframe.setAttribute("frame-id", this.id);
 
@@ -88,13 +87,12 @@ export class ProxyFrame {
     };
   }
 
-  async wait_for_libcurl() {
-    if (libcurl.ready) return;
-    await libcurl.load_wasm();
+  async wait_for_epoxy() {
+    await network.init_epoxy();
   }
 
   async navigate_to(url, form_data=null) {
-    await this.wait_for_libcurl();
+    await this.wait_for_epoxy();
     if (!util.is_valid_url(url)) {
       throw TypeError("Invalid URL");
     }
@@ -124,7 +122,7 @@ export class ProxyFrame {
             body: form_data.body
           }
         }
-        let response = await network.session.fetch(url, options);
+        let response = await network.pooled_fetch(url, options);
         html = await response.text();
         url = response.url;
       }
@@ -133,6 +131,13 @@ export class ProxyFrame {
       }  
     }
     this.url = new URL(url);
+    let wasm = null;
+    try {
+      wasm = rewriter_wasm.get_rewriter_bytes();
+    }
+    catch (e) {
+      console.error("failed to load rewriter wasm:", e);
+    }
     
     let settings = this.site_settings.find((item) => {
       return item.hostname.test(this.url.hostname);
@@ -155,7 +160,8 @@ export class ProxyFrame {
         settings: settings,
         default_settings: this.default_settings,
         local_storage: local_storage[this.url.origin],
-        version: version
+        version: version,
+        wasm: wasm
       });
     }
     catch (e) {
@@ -196,6 +202,11 @@ rpc.rpc_handlers["local_storage"] = async (frame_id, entries) => {
   if (window.origin) {
     localStorage.setItem(persist_storage_key, JSON.stringify(local_storage));
   }
+}
+
+//frame error reporting from the sandboxed frame (for debugging proxied sites)
+rpc.rpc_handlers["frame_error"] = (msg) => {
+  console.error("[FRAME]", msg);
 }
 
 //this is for getting navigation events from form submission handlers

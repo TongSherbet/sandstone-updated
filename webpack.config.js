@@ -59,6 +59,11 @@ const bundles = [
           resource: /dist\/sandstone_frame\.js$/,
           type: "asset/source"
         },
+        {
+          // inline the rewriter wasm as a base64 data URI in the host bundle
+          test: /\.wasm$/,
+          type: "asset/inline"
+        },
       ],
     },
     mode: "development",

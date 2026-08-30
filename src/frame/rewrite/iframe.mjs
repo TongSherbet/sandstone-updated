@@ -5,6 +5,17 @@ import * as util from "../../util.mjs";
 import * as rpc from "../../rpc.mjs";
 
 export function rewrite_iframe(iframe_element) {
+  // idempotent: both the initial parse pass (rewrite.element) and the
+  // media MutationObserver may call this on the same element.
+  // scramjet strips the sandbox attribute: a sandboxed nested frame cannot run
+  // the proxied runtime we inject, so scripts/frames inside it would silently
+  // fail. Strip it unconditionally (cheap + idempotent) so it applies even on
+  // repeated rewrites.
+  if (iframe_element.hasAttribute("sandbox")) iframe_element.removeAttribute("sandbox");
+
+  if (iframe_element.__iframe_rewritten__) return;
+  iframe_element.__iframe_rewritten__ = true;
+
   let iframe_src = iframe_element.src;
   let iframe_url = "";
 

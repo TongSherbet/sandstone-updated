@@ -16,8 +16,8 @@
     "dev:all": "concurrently 'npm run dev' 'cd example; npm run dev'"
   },
   "dependencies": {
+    "@mercuryworkshop/epoxy-transport": "^3.0.1",
     "astray": "^1.1.1",
-    "libcurl.js": "^0.7.0",
     "meriyah": "^6.0.3"
   },
   "devDependencies": {

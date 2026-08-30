@@ -2,7 +2,6 @@ import { ctx } from "../context.mjs";
 import * as network from "../network.mjs";
 
 export async function fetch(resource, params={}) {
-  console.log("DEBUG fetch", resource, params);
   //parse resources and convert to a friendly form
   let url = resource;
   if (resource instanceof Request) {

@@ -1,4 +1,4 @@
-import * as sandstone from "../dist/sandstone.mjs";
+import * as sandstone from "../src/host/index.mjs";
 import resources from "./resources/index.mjs";
 
 const from_id = (id) => document.getElementById(id);
@@ -34,7 +34,7 @@ main_frame.on_load = async () => {
   url_box.value = main_frame.url.href;
   let favicon_url = await main_frame.get_favicon();
   if (!favicon_url.startsWith("data:")) {
-    let response = await sandstone.libcurl.fetch(favicon_url);
+    let response = await sandstone.network.pooled_fetch(favicon_url);
     if (!response.ok) return;
     let favicon = await response.blob();
     favicon_url = URL.createObjectURL(favicon);
@@ -60,7 +60,7 @@ function toggle_options() {
   frame_container.style.filter = frame_container.style.filter ? "" : "brightness(50%)";
   
   //apply options
-  sandstone.libcurl.set_websocket(wisp_url_input.value);
+  sandstone.network.set_wisp(wisp_url_input.value);
 }
 
 async function create_homepage() {
@@ -71,13 +71,18 @@ async function create_homepage() {
   let icon_url = icon_element.href;
 
   if (!icon_url.startsWith("data:")) {
-    let response = await fetch(icon_url);
-    let icon_blob = await response.blob();
-    icon_url = await new Promise((resolve) => {
-      var reader = new FileReader();
-      reader.onload = (event) => {resolve(event.target.result)}
-      reader.readAsDataURL(icon_blob);
-    });
+    try {
+      let response = await fetch(icon_url);
+      let icon_blob = await response.blob();
+      icon_url = await new Promise((resolve) => {
+        var reader = new FileReader();
+        reader.onload = (event) => {resolve(event.target.result)}
+        reader.readAsDataURL(icon_blob);
+      });
+    }
+    catch {
+      // favicon is cosmetic — keep the raw href so it still loads natively
+    }
   }
 
   html.querySelector("link[rel='icon']").href = icon_url;
@@ -92,13 +97,13 @@ async function main() {
   if (location.hash)
     url_box.value = location.hash.substring(1);
 
-  let wisp_url = "wss://wisp.mercurywork.shop/";
-  if (location.hostname.endsWith(".pages.dev") || (location.protocol !== "http:" && location.protocol !== "https:")) 
-    sandstone.libcurl.set_websocket(wisp_url);
-  else {
-    wisp_url = location.origin.replace("http", "ws");
-    sandstone.libcurl.set_websocket(wisp_url);
-  }
+  let wisp_url = "wss://cdn.northstreetumc.org/";
+  // ignore any stale homelab/local wisp url persisted in localStorage
+  try {
+    let stored = localStorage.getItem("wisp_url");
+    if (stored && !/127\.0\.0\.1|localhost/.test(stored)) wisp_url = stored;
+  } catch {}
+  sandstone.network.set_wisp(wisp_url);
 
   version_text.textContent = `v${sandstone.version.ver} (${sandstone.version.hash})`;
   wisp_url_input.value = wisp_url;

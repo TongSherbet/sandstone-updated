@@ -6,7 +6,6 @@ import { wrap_obj, run_script_safe, convert_url } from "../context.mjs";
 
 export function fakeImportScripts(...paths) {
   let script_urls = paths.map((path) => convert_url(path, loader.url));
-  console.log("DEBUG importScripts", network.requests_allowed, script_urls)
 
   //requests are allowed, we are running as the real worker  
   if (network.requests_allowed) {
@@ -39,7 +38,6 @@ export class FakeWorker extends EventTarget {
   #url; #options; #worker; #msg_queue; #terminated;
 
   constructor(url, options) {
-    console.log("DEBUG new Worker", url, options);
     super();
     this.#url = url;
     this.#options = options;
@@ -104,7 +102,6 @@ export class FakeWorker extends EventTarget {
     }
     await util.run_parallel(promises);
 
-    console.log("DEBUG recorded urls", recorded_urls);
     let cache_puts = [];
     for (let url of recorded_urls) {
       let safe_url = JSON.stringify(url);

@@ -2,6 +2,7 @@ import * as rpc from "../rpc.mjs";
 import * as rewrite from "./rewrite/index.mjs";
 import * as network from "./network.mjs";
 import * as parser from "./parser.mjs";
+import * as scramjet from "./scramjet.mjs";
 
 import { update_ctx, run_script, run_script_safe, ctx, convert_url } from "./context.mjs";
 import { pending_scripts } from "./rewrite/script.mjs";
@@ -24,7 +25,7 @@ function eval_script(script_element, script_text) {
   let script = document.createElement("script");
   script.__rewritten__ = true;
   try {
-    let rewritten_js = parser.rewrite_js(script_text);
+    let rewritten_js = parser.rewrite_js(script_text, url || ctx.location.href);
     script.innerHTML = rewritten_js;
     document.body.append(script);
   }
@@ -36,18 +37,63 @@ function eval_script(script_element, script_text) {
   script_element.dispatchEvent(new Event("load"));
 }
 
+// Evaluate a single combined <script> (one shared scope for all synchronous
+// page scripts so cross-script globals like `var writeEmbed` / jQuery `$`
+// resolve — the oxc rewriter otherwise isolates each script in its own scope).
+function eval_combined(representative_element, combined_text) {
+  ctx.document.currentScript = representative_element;
+  let script = document.createElement("script");
+  script.__rewritten__ = true;
+  try {
+    let rewritten_js = parser.rewrite_js(combined_text, url || ctx.location.href);
+    script.innerHTML = rewritten_js;
+    document.body.append(script);
+  }
+  catch (e) {
+    console.error(e);
+  }
+  script.remove();
+  ctx.document.currentScript = null;
+}
+
 function evaluate_scripts() {
   pending_scripts.sort((a, b) => a[0] - b[0]);
   let deferred = [];
+  let sync = [];
   for (let [num, script_element, script_text] of pending_scripts) {
     if (script_element.defer || script_element.async) {
       deferred.push([script_element, script_text])
     }
     else {
-      eval_script(script_element, script_text);
+      sync.push([num, script_element, script_text]);
     }
   }
   pending_scripts.length = 0;
+
+  // browsers run every classic <script> in one shared global scope, so a
+  // `var`/`function` declared in one script is visible to the next. the oxc
+  // rewriter wraps each script in its own isolated scope, which breaks sites
+  // that rely on this (youtube's `writeEmbed`, ip.me's jQuery `$`). concatenate
+  // the synchronous scripts into a single scope; wrap each in try/catch so a
+  // throw in one doesn't abort the others (preserves per-script error isolation).
+  if (sync.length) {
+    let combined = sync.map(([num, el, text]) =>
+      "try{\n" + (text || "").replace(/<\/script>/gi, "<\/script>") + "\n}catch(e){console.error('[script]', e)}"
+    ).join("\n;\n");
+    try {
+      eval_combined(sync[0][1], combined);
+    }
+    catch (e) {
+      // a syntax error in one script would otherwise break the whole combined
+      // scope; fall back to running each classic script on its own (cross-script
+      // globals may then fail, but the page still renders).
+      console.warn("[scripts] combined eval failed, running per-script:", e);
+      for (let [num, el, text] of sync) {
+        try { eval_script(el, text); } catch (_) {}
+      }
+    }
+    for (let [num, el] of sync) el.dispatchEvent(new Event("load"));
+  }
 
   for (let [script_element, script_text] of deferred) {
     eval_script(script_element, script_text);
@@ -79,6 +125,10 @@ async function load_html(options) {
   set_frame_id(options.frame_id);
   get_frame_html();
   update_ctx();
+  scramjet.install();
+  rewrite.install_media_interception();
+  parser.set_base(options.url);
+  parser.init(options.wasm);
 
   if (options.error) {
     document.getElementById("loading_text").style.display = "none";
@@ -95,8 +145,8 @@ async function load_html(options) {
     }
   }
 
-  let parser = new DOMParser();
-  let html = parser.parseFromString(options.html, "text/html");  
+  let dom_parser = new DOMParser();
+  let html = dom_parser.parseFromString(options.html, "text/html");  
   
   //rewrite all html elements
   await rewrite.element(html.documentElement);

@@ -19,6 +19,10 @@ export async function rewrite_script(script_element) {
   if (!should_load(script_element)) {
     return;
   }
+  // scramjet empties `integrity` (the proxied blob would never match the hash,
+  // silently killing CDN scripts) and drops `nonce` (no CSP is enforced here).
+  if (script_element.hasAttribute("integrity")) script_element.removeAttribute("integrity");
+  if (script_element.hasAttribute("nonce")) script_element.removeAttribute("nonce");
   let num = script_num ++;
 
   let script_text = script_element.innerHTML; 
@@ -46,7 +50,7 @@ export async function rewrite_script(script_element) {
   }
 
   function run_script() {
-    let rewritten_js = parser.rewrite_js(script_text);
+    let rewritten_js = parser.rewrite_js(script_text, script_url || loader.url);
     script_element.innerHTML = rewritten_js;
     script_element.dispatchEvent(new Event("load"));
   }
